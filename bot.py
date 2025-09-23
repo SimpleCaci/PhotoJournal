@@ -1,26 +1,94 @@
 import discord
 from discord.ext import commands
-import os
+import os, aiohttp, textwrap, random, shutil
+from PIL import Image, ImageDraw, ImageFont
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from datetime import datetime
-import aiohttp
 
-# Load environment variables
+# =======================
+# CONFIG
+# =======================
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-# Channels to watch
-CHANNEL_NAMES = ["daily-log", "notes", "documents", "projects"]
+CHANNEL_NAMES = ["daily-log", "notes", "documents", "projects", "memes"]
+IMAGE_ROOT = "images"
+MAX_IMAGE_SIZE_MB = 10  # Prevent giant uploads
+FONT_PATH = "arial.ttf"  # Change to handwriting font if you want
 
-# Setup bot
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Root folder
-IMAGE_ROOT = "images"
 os.makedirs(IMAGE_ROOT, exist_ok=True)
 
+# =======================
+# POLAROID FUNCTION
+# =======================
+def make_polaroid(input_path, output_path, caption=""):
+    try:
+        image = Image.open(input_path).convert("RGB")
+
+        date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        full_text = f"{caption}\n{date_str}" if caption else date_str
+
+        try:
+            font = ImageFont.truetype(FONT_PATH, 40)
+        except:
+            font = ImageFont.load_default()
+
+        wrapped_text = "\n".join(textwrap.wrap(full_text, width=35))
+
+        border_top = 50
+        border_side = 50
+        border_bottom_base = 200
+
+        dummy_img = Image.new("RGB", (10, 10))
+        dummy_draw = ImageDraw.Draw(dummy_img)
+        bbox = dummy_draw.textbbox((0, 0), wrapped_text, font=font)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        border_bottom = max(border_bottom_base, text_height + 120)
+
+        new_width = max(image.width + border_side*2, text_width + border_side*2 + 40)
+        new_height = image.height + border_top + border_bottom
+
+        new_img = Image.new("RGB", (new_width, new_height), "white")
+        new_img.paste(image, (border_side, border_top))
+
+        draw = ImageDraw.Draw(new_img)
+        text_x = (new_width - text_width) // 2
+        text_y = image.height + border_top + (border_bottom - text_height) // 2
+        draw.text((text_x, text_y), wrapped_text, font=font, fill="black")
+
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        new_img.save(output_path)
+        print(f"📸 Polaroid saved: {output_path}")
+
+    except Exception as e:
+        print(f"⚠️ Error converting {input_path}: {e}")
+
+# =======================
+# HELP COMMAND
+# =======================
+@bot.command(name="helpme")
+async def helpme(ctx):
+    help_text = """
+    **Photo Bot Commands**
+    `!list <channel>` → List all Polaroids in a channel
+    `!send <channel> <filename>` → Send a specific Polaroid
+    `!sendlist <channel> <file1> <file2>` → Send multiple files
+    `!sendday <channel> <YYYY-MM-DD>` → Send all from a day
+    `!latest <channel>` → Send the most recent Polaroid
+    `!random <channel>` → Send a random Polaroid
+    `!caption <channel> <filename> <new caption>` → Update caption & regenerate Polaroid
+    `!cleanupdays <N>` → Delete files older than N days
+    """
+    await ctx.send(help_text)
+
+# =======================
+# EVENTS
+# =======================
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
@@ -35,115 +103,91 @@ async def on_ready():
 async def on_message(message):
     if message.author == bot.user:
         return
+
     if message.channel.name in CHANNEL_NAMES and message.attachments:
-        channel_folder = os.path.join(IMAGE_ROOT, message.channel.name)
-        os.makedirs(channel_folder, exist_ok=True)
+        base_folder = os.path.join(IMAGE_ROOT, message.channel.name)
+        today = datetime.now().strftime("%Y-%m-%d")
+        original_folder = os.path.join(base_folder, "original", today)
+        polaroid_folder = os.path.join(base_folder, "polaroid", today)
+        os.makedirs(original_folder, exist_ok=True)
+        os.makedirs(polaroid_folder, exist_ok=True)
 
         for attachment in message.attachments:
+            if attachment.size > MAX_IMAGE_SIZE_MB * 1024 * 1024:
+                await message.channel.send(f"⚠️ `{attachment.filename}` is too large! Skipping...")
+                continue
+
             if attachment.filename.lower().endswith(("png", "jpg", "jpeg", "gif", "webp")):
                 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 filename = f"{timestamp}_{attachment.filename}"
-                filepath = os.path.join(channel_folder, filename)
+
+                original_path = os.path.join(original_folder, filename)
+                polaroid_path = os.path.join(polaroid_folder, filename)
 
                 async with aiohttp.ClientSession() as session:
                     async with session.get(attachment.url) as resp:
                         if resp.status == 200:
-                            with open(filepath, "wb") as f:
+                            with open(original_path, "wb") as f:
                                 f.write(await resp.read())
 
-                if message.content.strip():
-                    caption_path = filepath + ".txt"
-                    with open(caption_path, "w", encoding="utf-8") as f:
-                        f.write(message.content)
+                make_polaroid(original_path, polaroid_path, message.content.strip())
+                await message.channel.send(f"✅ `{filename}` saved as Polaroid!")
 
-                print(f"Saved image: {filename} in {channel_folder}")
-                await message.channel.send(f"✅ Saved `{filename}` with caption!")
     await bot.process_commands(message)
 
-# -----------------------------
-# COMMAND: List all images in a folder
-# -----------------------------
-@bot.command(name="list")
-async def list_images(ctx, channel_name: str):
-    folder_path = os.path.join(IMAGE_ROOT, channel_name)
-    if not os.path.exists(folder_path):
-        await ctx.send(f"❌ No folder found for `{channel_name}`.")
+# =======================
+# NEW COMMANDS
+# =======================
+@bot.command(name="latest")
+async def send_latest(ctx, channel_name: str):
+    folder = os.path.join(IMAGE_ROOT, channel_name, "polaroid")
+    all_files = []
+    for root, _, files in os.walk(folder):
+        all_files.extend([os.path.join(root, f) for f in files if f.lower().endswith(("png","jpg","jpeg"))])
+    if not all_files:
+        await ctx.send(f"❌ No Polaroids in `{channel_name}`.")
         return
+    latest_file = max(all_files, key=os.path.getmtime)
+    await ctx.send(file=discord.File(latest_file))
 
-    files = [f for f in os.listdir(folder_path) if f.lower().endswith(("png", "jpg", "jpeg", "gif", "webp"))]
-    if not files:
-        await ctx.send(f"📂 No images found in `{channel_name}`.")
+@bot.command(name="random")
+async def send_random(ctx, channel_name: str):
+    folder = os.path.join(IMAGE_ROOT, channel_name, "polaroid")
+    all_files = []
+    for root, _, files in os.walk(folder):
+        all_files.extend([os.path.join(root, f) for f in files if f.lower().endswith(("png","jpg","jpeg"))])
+    if not all_files:
+        await ctx.send(f"❌ No Polaroids in `{channel_name}`.")
         return
+    random_file = random.choice(all_files)
+    await ctx.send(file=discord.File(random_file))
 
-    file_list = "\n".join(files)
-    await ctx.send(f"📂 **Images in `{channel_name}`:**\n```\n{file_list}\n```")
+@bot.command(name="caption")
+async def update_caption(ctx, channel_name: str, file_name: str, *, new_caption: str):
+    polaroid_folder = os.path.join(IMAGE_ROOT, channel_name, "polaroid")
+    original_folder = os.path.join(IMAGE_ROOT, channel_name, "original")
+    for root, _, files in os.walk(original_folder):
+        if file_name in files:
+            original_path = os.path.join(root, file_name)
+            polaroid_path = os.path.join(polaroid_folder, file_name)
+            make_polaroid(original_path, polaroid_path, new_caption)
+            await ctx.send(f"✅ Caption updated for `{file_name}`")
+            return
+    await ctx.send(f"❌ File `{file_name}` not found in `{channel_name}`.")
 
-# -----------------------------
-# COMMAND: Send specific image
-# -----------------------------
-@bot.command(name="send")
-async def send_image(ctx, channel_name: str, *, file_name: str):
-    channel = discord.utils.get(ctx.guild.text_channels, name=channel_name)
-    if channel is None:
-        await ctx.send(f"❌ Channel `{channel_name}` not found.")
-        return
+@bot.command(name="cleanupdays")
+async def cleanup_days(ctx, days: int):
+    cutoff = datetime.now() - timedelta(days=days)
+    deleted_files = 0
+    for root, _, files in os.walk(IMAGE_ROOT):
+        for f in files:
+            f_path = os.path.join(root, f)
+            if datetime.fromtimestamp(os.path.getmtime(f_path)) < cutoff:
+                os.remove(f_path)
+                deleted_files += 1
+    await ctx.send(f"🗑️ Deleted {deleted_files} files older than {days} days.")
 
-    file_path = os.path.join(IMAGE_ROOT, channel_name, file_name)
-    if not os.path.exists(file_path):
-        await ctx.send(f"❌ File `{file_name}` not found in `{channel_name}` folder.")
-        return
-
-    await channel.send(file=discord.File(file_path))
-    await ctx.send(f"✅ Sent `{file_name}` to #{channel_name}")
-
-# -----------------------------
-# COMMAND: Send multiple images from list
-# -----------------------------
-@bot.command(name="sendlist")
-async def send_image_list(ctx, channel_name: str, *file_names: str):
-    channel = discord.utils.get(ctx.guild.text_channels, name=channel_name)
-    if channel is None:
-        await ctx.send(f"❌ Channel `{channel_name}` not found.")
-        return
-
-    folder_path = os.path.join(IMAGE_ROOT, channel_name)
-    sent_files = []
-    for file_name in file_names:
-        file_path = os.path.join(folder_path, file_name)
-        if os.path.exists(file_path):
-            await channel.send(file=discord.File(file_path))
-            sent_files.append(file_name)
-
-    if sent_files:
-        await ctx.send(f"✅ Sent {len(sent_files)} files to #{channel_name}")
-    else:
-        await ctx.send(f"❌ No valid files found to send.")
-
-# -----------------------------
-# COMMAND: Send all images from a specific day
-# -----------------------------
-@bot.command(name="sendday")
-async def send_images_by_day(ctx, channel_name: str, date_str: str):
-    """Send all images from a given day (format: YYYY-MM-DD)"""
-    channel = discord.utils.get(ctx.guild.text_channels, name=channel_name)
-    if channel is None:
-        await ctx.send(f"❌ Channel `{channel_name}` not found.")
-        return
-
-    folder_path = os.path.join(IMAGE_ROOT, channel_name)
-    if not os.path.exists(folder_path):
-        await ctx.send(f"❌ No folder found for `{channel_name}`.")
-        return
-
-    files = [f for f in os.listdir(folder_path) if f.startswith(date_str) and f.lower().endswith(("png", "jpg", "jpeg", "gif", "webp"))]
-    if not files:
-        await ctx.send(f"📂 No images found in `{channel_name}` for {date_str}.")
-        return
-
-    for file_name in files:
-        file_path = os.path.join(folder_path, file_name)
-        await channel.send(file=discord.File(file_path))
-
-    await ctx.send(f"✅ Sent {len(files)} images from {date_str} in #{channel_name}")
-
+# =======================
+# RUN BOT
+# =======================
 bot.run(TOKEN)

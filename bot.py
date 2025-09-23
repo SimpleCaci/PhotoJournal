@@ -438,6 +438,20 @@ async def cleanup_days(ctx, days: int):
                 pass
     await ctx.send(f"🗑️ Removed {removed} file(s) older than {days} days.")
 
+@bot.command(name="purge")
+@commands.has_permissions(manage_messages=True)  # Only mods/admins can use
+async def purge(ctx, limit: int = 100):
+    """
+    Delete the last <limit> messages in the channel.
+    Default: 100
+    """
+    try:
+        deleted = await ctx.channel.purge(limit=limit)
+        await ctx.send(f"🧹 Deleted {len(deleted)} messages.", delete_after=3)
+    except Exception as e:
+        await ctx.send(f"⚠️ Error while purging: {e}")
+
+
 # =======================
 # RUN
 # =======================

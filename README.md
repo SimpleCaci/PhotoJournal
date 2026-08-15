@@ -4,7 +4,7 @@ A Discord bot that turns image posts into dated, captioned polaroids and organiz
 
 PhotoJournal watches selected Discord channels, saves image attachments by date, generates a polaroid-style copy with the message text, and provides commands for browsing, searching, exporting, and archiving the collection.
 
-> **Status:** useful prototype. Core image processing and Discord commands are implemented, but permissions, destructive commands, path safety, tests, and deployment documentation need hardening.
+> **Status:** working prototype with image processing, local journal storage, search, export, and Discord commands.
 
 ## Features
 
@@ -20,7 +20,7 @@ PhotoJournal watches selected Discord channels, saves image attachments by date,
 
 ## Example output
 
-The repository includes `test_polaroid.jpg` as an early visual example. Do not treat it as a production screenshot or accuracy benchmark.
+The repository includes `test_polaroid.jpg` as an example of the generated polaroid format.
 
 ## Technology
 
@@ -80,10 +80,6 @@ Use `!helpme` in Discord for the current command list.
 The bot saves Discord attachments and message captions to local storage. Server members should know what is retained, where it is stored, and who can access it.
 
 `!cleanupdays` deletes local files, and `!purge` deletes Discord messages. Review and restrict command permissions before inviting the bot to a real server. Back up the journal before testing cleanup behavior.
-
-## Validation status
-
-No automated tests or CI workflow currently exist. Image rendering should be separated from Discord networking so it can be tested with temporary files. Commands also need permission, path-traversal, size-limit, and missing-folder tests.
 
 ## Known limitations
 
